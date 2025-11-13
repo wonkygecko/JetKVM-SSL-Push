@@ -1,1 +1,12 @@
+# Directory folders
 .directory
+
+# IDE/Editor files
+.vscode/
+
+# Sensitive data
+.env
+
+# Log files and temporary files
+*.log
+*.tmp
