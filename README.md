@@ -79,5 +79,14 @@ If an error occurs the script sets `KEEP_ERRORS=true` and preserves the temp wor
 **Contributing**
 Feel free to open issues or PRs with improvements.
 
-**License**
-This project is licensed under the GNU General Public License v2 (or later). See `LICENSE` for details.
+📄 License
+___
+This project is licensed under the GNU General Public License v2 (or later) - see the `LICENSE` file for details.
+
+---
+
+<p align="center">
+Made with ❤️ by Kyle Britton
+<br>
+⭐ <a href="https://github.com/wonkygecko/JetKVM-SSL-Push">Star us on GitHub</a> • 🐛 <a href="https://github.com/wonkygecko/JetKVM-SSL-Push/issues">Report Bug</a>
+</p>
