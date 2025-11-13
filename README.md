@@ -1,8 +1,8 @@
-🔐 JetKVM SSL Push 🔐
+# <p align="center">🔐 JetKVM SSL Push 🔐</p>
 
-[![License: GPL v2+](https://img.shields.io/badge/License-GPLv2%20%2B-blue.svg)](./LICENSE)
+<p align="center">[![License: GPL v2+](https://img.shields.io/badge/License-GPLv2%20%2B-blue.svg)](./LICENSE)</p>
 
-A small Bash utility to automatically download TLS bundles from Certmate and push them to one or more JetKVM hosts over SSH.
+## A small Bash utility to automatically download TLS bundles from CertMate and push them to one or more JetKVM hosts over SSH.
 
 📜 Purpose
  ---
@@ -17,6 +17,7 @@ A small Bash utility to automatically download TLS bundles from Certmate and pus
 - Bash (script is POSIX-friendly with bashisms)
 - `curl`, `unzip`, `file` and `openssl` (openssl optional — used to show expiry)
 - `ssh` client configured with a private key that can connect to JetKVM hosts
+- A functional [CertMate](https://github.com/fabriziosalmi/certmate) installation
 ---
 
 📄 Files
@@ -68,7 +69,7 @@ chmod 600 /path/to/jetkvm_rsa
 
 📃 Error Preservation
 ---
-If an error occurs the script sets `KEEP_ERRORS=true` and preserves the temp workdir so you can inspect the saved artifacts and SSH logs. The path will be printed in the logs.
+- If an error occurs the script sets `KEEP_ERRORS=true` and preserves the temp workdir so you can inspect the saved artifacts and SSH logs. The path will be printed in the logs.
 ---
 
 🔒 Security & Safety
@@ -79,12 +80,12 @@ If an error occurs the script sets `KEEP_ERRORS=true` and preserves the temp wor
 
 🤝 Contributing
 ---
-Feel free to open issues or PRs with improvements.
+- Feel free to open issues or PRs with improvements.
 ---
 
 📄 License
 ---
-This project is licensed under the GNU General Public License v2 (or later) - see the `LICENSE` file for details.
+- This project is licensed under the GNU General Public License v2 (or later) - see the `LICENSE` file for details.
 ---
 
 <p align="center">
