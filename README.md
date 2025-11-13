@@ -1,6 +1,8 @@
 # <p align="center">🔐 JetKVM SSL Push 🔐</p>
 
-<p align="center">[![License: GPL v2+](https://img.shields.io/badge/License-GPLv2%20%2B-blue.svg)](./LICENSE)</p>
+
+[<p align="center">![License: GPL v2+](https://img.shields.io/badge/License-GPLv2%20%2B-blue.svg)</p>](./LICENSE)
+
 
 ## A small Bash utility to automatically download TLS bundles from CertMate and push them to one or more JetKVM hosts over SSH.
 
