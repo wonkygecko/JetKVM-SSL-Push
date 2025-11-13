@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2025 Kyle Britton <kyleb@wonkygecko.dev>
-# JetKVM SSL Push - automatic Certmate to JetKVM certificate uploader
-# with support for multiple JetKVM hosts
+# JetKVM SSL Push - A small Bash utility to automatically download TLS 
+# bundles from Certmate and push them to one or more JetKVM hosts over SSH.
 #
 # This script is released under the GNU General Public License v2 or later.
 # See the project's `LICENSE` file for the full text.
