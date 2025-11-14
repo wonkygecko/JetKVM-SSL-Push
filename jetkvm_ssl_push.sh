@@ -177,7 +177,7 @@ ensure_remote_tls_custom() {
   ssh_out=$(ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" 2>"$ssh_err" <<'REMOTE'
 set -e
 CONFIG="/data/jetkvm_config.json"
-if [[ ! -f "$CONFIG" ]]; then
+  if [ ! -f "$CONFIG" ]; then
   echo "NO_CONFIG"
   exit 0
 fi
@@ -188,7 +188,7 @@ fi
       echo "OK"
     else
       tmp=$(mktemp)
-      sed -E 's/("tls_mode"[[:space:]]*:[[:space:]]*)"[^"]*"/\1"custom"/' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG" && echo "UPDATED" || echo "SED_FAILED"
+        sed 's/\("tls_mode"[[:space:]]*:[[:space:]]*\)"[^"]*"/\1"custom"/' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG" && echo "UPDATED" || echo "SED_FAILED"
     fi
   else
     # Do not insert tls_mode if missing; report and skip
