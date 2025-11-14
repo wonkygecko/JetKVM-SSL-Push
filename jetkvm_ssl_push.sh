@@ -321,7 +321,7 @@ for entry in "${HOSTS[@]}"; do
     log "    ! Failed to download ${CERT_NAME} after retries"
     log "    ! Error details saved to: $ERROR_FILE"
     KEEP_ERRORS=true
-    ((FAIL_COUNT++))
+      ((FAIL_COUNT++)) || true
     continue
   fi
 
@@ -334,7 +334,7 @@ for entry in "${HOSTS[@]}"; do
     cp "$ZIPFILE" "$ERROR_FILE"
     log "    ! Error details saved to: $ERROR_FILE"
     KEEP_ERRORS=true
-    ((FAIL_COUNT++))
+    ((FAIL_COUNT++)) || true
     continue
   fi
 
@@ -345,7 +345,7 @@ for entry in "${HOSTS[@]}"; do
     cp "$ZIPFILE" "$ERROR_FILE" 2>/dev/null || true
     log "    ! Error details saved to: $ERROR_FILE"
     KEEP_ERRORS=true
-    ((FAIL_COUNT++))
+    ((FAIL_COUNT++)) || true
     continue
   fi
 
@@ -354,7 +354,7 @@ for entry in "${HOSTS[@]}"; do
 
   if [[ ! -f "$FULLCHAIN" || ! -f "$PRIVKEY" ]]; then
     log "    ! ERROR: ${CERT_NAME} archive did not contain fullchain.pem and privkey.pem"
-    ((FAIL_COUNT++))
+    ((FAIL_COUNT++)) || true
     continue
   fi
 
@@ -368,7 +368,7 @@ for entry in "${HOSTS[@]}"; do
     log "    [DRY-RUN] Would upload cert/key to ${JETKVM_HOST}"
     log "    [DRY-RUN] Would restart service on ${JETKVM_HOST}"
     log "    [OK] ${JETKVM_HOST} (dry-run)"
-    ((SUCCESS_COUNT++))
+    ((SUCCESS_COUNT++)) || true
     continue
   fi
 
@@ -378,7 +378,7 @@ for entry in "${HOSTS[@]}"; do
   # Compare downloaded cert/key with existing remote files; skip upload/restart if identical
   if compare_remote_certs "${JETKVM_HOST}" "$FULLCHAIN" "$PRIVKEY"; then
     log "    [OK] ${JETKVM_HOST} (no update required)"
-    ((SUCCESS_COUNT++))
+    ((SUCCESS_COUNT++)) || true
     continue
   fi
 
@@ -388,7 +388,7 @@ for entry in "${HOSTS[@]}"; do
     log "    ! Failed to upload certificate to ${JETKVM_HOST}"
     log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
     KEEP_ERRORS=true
-    ((FAIL_COUNT++))
+      ((FAIL_COUNT++)) || true
     continue
   fi
   
@@ -397,7 +397,7 @@ for entry in "${HOSTS[@]}"; do
     log "    ! Failed to upload key to ${JETKVM_HOST}"
     log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
     KEEP_ERRORS=true
-    ((FAIL_COUNT++))
+    ((FAIL_COUNT++)) || true
     continue
   fi
 
@@ -417,12 +417,12 @@ EOSSH
     log "    ! Failed to restart service on ${JETKVM_HOST}"
     log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
     KEEP_ERRORS=true
-    ((FAIL_COUNT++))
+    ((FAIL_COUNT++)) || true
     continue
   fi
 
   log "    [OK] ${JETKVM_HOST} updated"
-  ((SUCCESS_COUNT++))
+  ((SUCCESS_COUNT++)) || true
 done
 
 # ----------------------------
