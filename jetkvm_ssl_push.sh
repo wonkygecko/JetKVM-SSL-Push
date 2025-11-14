@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+# Log failing line and exit code when a command errors (helps debug premature exits).
+trap 'rc=$?; log "[!] ERROR at ${BASH_SOURCE[0]}:$LINENO - exit $rc"' ERR
+
 # ----------------------------
 # Logging function with timestamps
 # ----------------------------
@@ -174,7 +177,7 @@ ensure_remote_tls_custom() {
   log "    - ensuring remote /data/kvm_config.json has tls_mode=custom on ${host}"
   local ssh_err="$WORKDIR/ssh_tls_${host}.err"
   local ssh_out
-  ssh_out=$(ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" 2>"$ssh_err" <<'REMOTE'
+  if ! ssh_out=$(ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" 2>"$ssh_err" <<'REMOTE'
 set -e
 CONFIG="/data/kvm_config.json"
   if [ ! -f "$CONFIG" ]; then
@@ -195,10 +198,7 @@ fi
     echo "NO_ENTRY"
   fi
 REMOTE
-)
-
-  # ssh failed to run at all
-  if [[ $? -ne 0 ]]; then
+  ); then
     log "    ! SSH failure while ensuring tls_mode on ${host} - see $ssh_err"
     return 1
   fi
@@ -333,7 +333,15 @@ for entry in "${HOSTS[@]}"; do
   fi
 
   log "    - unpacking..."
-  unzip -oq "$ZIPFILE" -d "$CERTDIR"
+  if ! unzip -oq "$ZIPFILE" -d "$CERTDIR"; then
+    log "    ! Failed to unpack ${ZIPFILE}"
+    ERROR_FILE="$WORKDIR/error_${CERT_NAME}.txt"
+    cp "$ZIPFILE" "$ERROR_FILE" 2>/dev/null || true
+    log "    ! Error details saved to: $ERROR_FILE"
+    KEEP_ERRORS=true
+    ((FAIL_COUNT++))
+    continue
+  fi
 
   FULLCHAIN="$CERTDIR/fullchain.pem"
   PRIVKEY="$CERTDIR/privkey.pem"
