@@ -167,6 +167,71 @@ for entry in "${HOSTS[@]}"; do
 done
 
 # ----------------------------
+# 7.b ensure tls_mode is set to 'custom' on remote
+# ----------------------------
+ensure_remote_tls_custom() {
+  local host="$1"
+  log "    - ensuring remote /data/jetkvm_config.json has tls_mode=custom on ${host}"
+  local ssh_err="$WORKDIR/ssh_tls_${host}.err"
+  local ssh_out
+
+  ssh_out=$(ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" 2>"$ssh_err" <<'REMOTE'
+set -e
+CONFIG="/data/jetkvm_config.json"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "NO_CONFIG"
+  exit 0
+fi
+if command -v jq >/dev/null 2>&1; then
+  CURRENT=$(jq -r '.tls_mode // ""' "$CONFIG")
+  if [[ "$CURRENT" != "custom" ]]; then
+    tmp=$(mktemp)
+    jq '.tls_mode="custom"' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+    echo "UPDATED"
+  else
+    echo "OK"
+  fi
+elif command -v python3 >/dev/null 2>&1; then
+  CURRENT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("tls_mode",""))' "$CONFIG")
+  if [[ "$CURRENT" != "custom" ]]; then
+    python3 -c 'import json,sys,os; p=sys.argv[1]; d=json.load(open(p)); d["tls_mode"]="custom"; open(p+".tmp","w").write(json.dumps(d,indent=2)); os.replace(p+".tmp",p)' "$CONFIG"
+    echo "UPDATED"
+  else
+    echo "OK"
+  fi
+else
+  echo "NO_TOOL"
+fi
+REMOTE
+)
+
+  # ssh failed to run at all
+  if [[ $? -ne 0 ]]; then
+    log "    ! SSH failure while ensuring tls_mode on ${host} - see $ssh_err"
+    return 1
+  fi
+
+  case "$ssh_out" in
+    UPDATED)
+      log "    [+] tls_mode set to 'custom' on ${host}"
+      ;;
+    OK)
+      log "    [OK] tls_mode already 'custom' on ${host}"
+      ;;
+    NO_CONFIG)
+      log "    ! No /data/jetkvm_config.json found on ${host}; skipping tls_mode update"
+      ;;
+    NO_TOOL)
+      log "    ! Neither 'jq' nor 'python3' available on ${host}; cannot modify /data/jetkvm_config.json"
+      ;;
+    *)
+      log "    ! Unexpected output while checking tls_mode on ${host}: $ssh_out"
+      ;;
+  esac
+  return 0
+}
+
+# ----------------------------
 # 8. constants / paths
 # ----------------------------
 REMOTE_DIR="/userdata/jetkvm/tls"
@@ -261,6 +326,9 @@ for entry in "${HOSTS[@]}"; do
     ((SUCCESS_COUNT++))
     continue
   fi
+
+  # Ensure remote JetKVM is configured to use a custom TLS mode before uploading
+  ensure_remote_tls_custom "${JETKVM_HOST}" || log "    ! Warning: ensure_remote_tls_custom failed for ${JETKVM_HOST} (continuing)"
 
   log "    - uploading cert/key to ${JETKVM_HOST}..."
   # upload cert
