@@ -98,8 +98,15 @@ fi
 # ----------------------------
 # 6. SSH configuration
 # ----------------------------
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=5"
+# dedicated known_hosts file stored alongside the script
+KNOWN_HOSTS_FILE="$SCRIPT_DIR/jetkvm_known_hosts"
+mkdir -p "$(dirname "$KNOWN_HOSTS_FILE")" || true
+touch "$KNOWN_HOSTS_FILE" 2>/dev/null || true
+chmod 644 "$KNOWN_HOSTS_FILE" 2>/dev/null || true
 
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=5 -o UserKnownHostsFile=$KNOWN_HOSTS_FILE"
+
+# create workdir early so we can save logs during connectivity checks
 WORKDIR="$(mktemp -d)"
 KEEP_ERRORS=false
 trap 'if [[ "$KEEP_ERRORS" == "false" ]]; then rm -rf "$WORKDIR"; fi' EXIT
@@ -112,11 +119,41 @@ for entry in "${HOSTS[@]}"; do
   JETKVM_HOST="${entry%%|*}"
   if [[ "$DRY_RUN" != "true" ]]; then
     SSH_CONN_LOG="$WORKDIR/ssh_conn_${JETKVM_HOST}.log"
+
+    # If host is not already present in our dedicated known_hosts, prompt to add it
+    if ! ssh-keygen -F "$JETKVM_HOST" -f "$KNOWN_HOSTS_FILE" >/dev/null 2>&1; then
+      log "[-] No host key for ${JETKVM_HOST} in ${KNOWN_HOSTS_FILE}"
+      if command -v ssh-keyscan >/dev/null 2>&1; then
+        KEYS="$(ssh-keyscan -t ecdsa,rsa,ed25519 "$JETKVM_HOST" 2>/dev/null || true)"
+        if [[ -z "$KEYS" ]]; then
+          log "    ! ssh-keyscan failed to retrieve host key for ${JETKVM_HOST}"
+          KEEP_ERRORS=true
+          exit 1
+        fi
+        log "    Host key(s) for ${JETKVM_HOST}:"
+        echo "$KEYS" | ssh-keygen -lf - 2>/dev/null || true
+
+        # prompt the user to accept the key
+        read -r -p "    Accept and add host key to ${KNOWN_HOSTS_FILE}? [y/N] " resp || resp="n"
+        if [[ "$resp" =~ ^[Yy]$ ]]; then
+          echo "$KEYS" >> "$KNOWN_HOSTS_FILE"
+          chmod 644 "$KNOWN_HOSTS_FILE" 2>/dev/null || true
+          log "    [+] Added host key for ${JETKVM_HOST} to ${KNOWN_HOSTS_FILE}"
+        else
+          log "    [-] Host key not accepted for ${JETKVM_HOST}; aborting"
+          KEEP_ERRORS=true
+          exit 1
+        fi
+      else
+        log "    ! ssh-keyscan not available; cannot fetch host key for ${JETKVM_HOST}"
+        KEEP_ERRORS=true
+        exit 1
+      fi
+    fi
+
     if ! ssh $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" "exit" 2>"$SSH_CONN_LOG"; then
       log "[-] Cannot connect to ${JETKVM_HOST} via SSH"
       log "[-] SSH stderr (first 200 bytes):"
-      sed -n '1,40p' "$SSH_CONN_LOG" | sed -n '1,1p' >/dev/null 2>&1 || true
-      # print up to first 200 bytes safely
       head -c 200 "$SSH_CONN_LOG" 2>/dev/null || true
       echo
       log "[-] Full SSH stderr saved to: $SSH_CONN_LOG"
