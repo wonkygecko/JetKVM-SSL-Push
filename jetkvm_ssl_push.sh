@@ -16,8 +16,14 @@
 
 set -euo pipefail
 
-# Log failing line and exit code when a command errors (helps debug premature exits).
-trap 'rc=$?; log "[!] ERROR at ${BASH_SOURCE[0]}:$LINENO - exit $rc"' ERR
+# Improved ERR trap: log the failing command, exit code, and caller info
+ERR_trap() {
+  rc=$?
+  # caller returns: <line> <function> <sourcefile>
+  caller_info=$(caller 0 || true)
+  log "[!] ERROR - exit $rc - command: ${BASH_COMMAND:-unknown} - caller: ${caller_info}"
+}
+trap 'ERR_trap' ERR
 
 # ----------------------------
 # Logging function with timestamps
