@@ -171,12 +171,12 @@ done
 # ----------------------------
 ensure_remote_tls_custom() {
   local host="$1"
-  log "    - ensuring remote /data/jetkvm_config.json has tls_mode=custom on ${host}"
+  log "    - ensuring remote /data/kvm_config.json has tls_mode=custom on ${host}"
   local ssh_err="$WORKDIR/ssh_tls_${host}.err"
   local ssh_out
   ssh_out=$(ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" 2>"$ssh_err" <<'REMOTE'
 set -e
-CONFIG="/data/jetkvm_config.json"
+CONFIG="/data/kvm_config.json"
   if [ ! -f "$CONFIG" ]; then
   echo "NO_CONFIG"
   exit 0
@@ -211,10 +211,10 @@ REMOTE
       log "    [OK] tls_mode already 'custom' on ${host}"
       ;;
     NO_CONFIG)
-      log "    ! No /data/jetkvm_config.json found on ${host}; skipping tls_mode update"
+      log "    ! No /data/kvm_config.json found on ${host}; skipping tls_mode update"
       ;;
     NO_ENTRY)
-      log "    ! 'tls_mode' not found in /data/jetkvm_config.json on ${host}; not inserting (skipping)"
+      log "    ! 'tls_mode' not found in /data/kvm_config.json on ${host}; not inserting (skipping)"
       ;;
     SED_FAILED|AWK_FAILED|BAD_FORMAT)
       log "    ! Failed to update /data/jetkvm_config.json on ${host}; see $ssh_err"
