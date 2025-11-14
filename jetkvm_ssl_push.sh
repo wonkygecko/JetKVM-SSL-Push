@@ -217,13 +217,49 @@ REMOTE
       log "    ! 'tls_mode' not found in /data/kvm_config.json on ${host}; not inserting (skipping)"
       ;;
     SED_FAILED|AWK_FAILED|BAD_FORMAT)
-      log "    ! Failed to update /data/jetkvm_config.json on ${host}; see $ssh_err"
+      log "    ! Failed to update /data/kvm_config.json on ${host}; see $ssh_err"
       ;;
     *)
       log "    ! Unexpected output while checking tls_mode on ${host}: $ssh_out"
       ;;
   esac
   return 0
+}
+
+# ----------------------------
+# compare remote cert/key to local files
+# ----------------------------
+compare_remote_certs() {
+  local host="$1" local_cert="$2" local_key="$3"
+  local remote_cert_tmp="$WORKDIR/remote_cert_${host}.pem"
+  local remote_key_tmp="$WORKDIR/remote_key_${host}.pem"
+  local ssh_err_cert="$WORKDIR/ssh_cert_err_${host}.log"
+  local ssh_err_key="$WORKDIR/ssh_key_err_${host}.log"
+
+  log "    - checking existing cert/key on ${host}"
+
+  # fetch remote cert
+  rm -f "$remote_cert_tmp" "$remote_key_tmp" "$ssh_err_cert" "$ssh_err_key"
+  if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" "cat '${REMOTE_CERT}'" > "$remote_cert_tmp" 2>"$ssh_err_cert"; then
+    # if remote cert doesn't exist or cannot be read, treat as update needed
+    log "    ! Could not read remote cert on ${host} (will upload). SSH stderr: $(head -c200 "$ssh_err_cert" 2>/dev/null || true)"
+    return 1
+  fi
+
+  # fetch remote key
+  if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" "cat '${REMOTE_KEY}'" > "$remote_key_tmp" 2>"$ssh_err_key"; then
+    log "    ! Could not read remote key on ${host} (will upload). SSH stderr: $(head -c200 "$ssh_err_key" 2>/dev/null || true)"
+    return 1
+  fi
+
+  # compare files
+  if cmp -s "$local_cert" "$remote_cert_tmp" && cmp -s "$local_key" "$remote_key_tmp"; then
+    log "    [OK] No update required on ${host} (cert/key identical)"
+    return 0
+  else
+    log "    - Remote cert/key differ from downloaded files on ${host} (will upload)"
+    return 1
+  fi
 }
 
 # ----------------------------
@@ -324,6 +360,13 @@ for entry in "${HOSTS[@]}"; do
 
   # Ensure remote JetKVM is configured to use a custom TLS mode before uploading
   ensure_remote_tls_custom "${JETKVM_HOST}" || log "    ! Warning: ensure_remote_tls_custom failed for ${JETKVM_HOST} (continuing)"
+
+  # Compare downloaded cert/key with existing remote files; skip upload/restart if identical
+  if compare_remote_certs "${JETKVM_HOST}" "$FULLCHAIN" "$PRIVKEY"; then
+    log "    [OK] ${JETKVM_HOST} (no update required)"
+    ((SUCCESS_COUNT++))
+    continue
+  fi
 
   log "    - uploading cert/key to ${JETKVM_HOST}..."
   # upload cert
