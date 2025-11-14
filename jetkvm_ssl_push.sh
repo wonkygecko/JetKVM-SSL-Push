@@ -100,6 +100,10 @@ fi
 # ----------------------------
 SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=5"
 
+WORKDIR="$(mktemp -d)"
+KEEP_ERRORS=false
+trap 'if [[ "$KEEP_ERRORS" == "false" ]]; then rm -rf "$WORKDIR"; fi' EXIT
+
 # ----------------------------
 # 7. validate SSH connectivity
 # ----------------------------
@@ -107,8 +111,16 @@ log "[+] Validating SSH connectivity..."
 for entry in "${HOSTS[@]}"; do
   JETKVM_HOST="${entry%%|*}"
   if [[ "$DRY_RUN" != "true" ]]; then
-    if ! ssh $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" "exit" 2>/dev/null; then
+    SSH_CONN_LOG="$WORKDIR/ssh_conn_${JETKVM_HOST}.log"
+    if ! ssh $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" "exit" 2>"$SSH_CONN_LOG"; then
       log "[-] Cannot connect to ${JETKVM_HOST} via SSH"
+      log "[-] SSH stderr (first 200 bytes):"
+      sed -n '1,40p' "$SSH_CONN_LOG" | sed -n '1,1p' >/dev/null 2>&1 || true
+      # print up to first 200 bytes safely
+      head -c 200 "$SSH_CONN_LOG" 2>/dev/null || true
+      echo
+      log "[-] Full SSH stderr saved to: $SSH_CONN_LOG"
+      KEEP_ERRORS=true
       exit 1
     fi
     log "    [OK] ${JETKVM_HOST}"
