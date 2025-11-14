@@ -174,7 +174,6 @@ ensure_remote_tls_custom() {
   log "    - ensuring remote /data/jetkvm_config.json has tls_mode=custom on ${host}"
   local ssh_err="$WORKDIR/ssh_tls_${host}.err"
   local ssh_out
-
   ssh_out=$(ssh -T $SSH_OPTS "${JETKVM_USER}@${host}" 2>"$ssh_err" <<'REMOTE'
 set -e
 CONFIG="/data/jetkvm_config.json"
@@ -182,26 +181,19 @@ if [[ ! -f "$CONFIG" ]]; then
   echo "NO_CONFIG"
   exit 0
 fi
-if command -v jq >/dev/null 2>&1; then
-  CURRENT=$(jq -r '.tls_mode // ""' "$CONFIG")
-  if [[ "$CURRENT" != "custom" ]]; then
-    tmp=$(mktemp)
-    jq '.tls_mode="custom"' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-    echo "UPDATED"
+  # BusyBox-only fallback using sed/awk: check or insert tls_mode, set to "custom"
+  if grep -q '"tls_mode"' "$CONFIG"; then
+    # if already set to custom, report OK; otherwise replace value
+    if grep -q '"tls_mode"[[:space:]]*:[[:space:]]*"custom"' "$CONFIG"; then
+      echo "OK"
+    else
+      tmp=$(mktemp)
+      sed -E 's/("tls_mode"[[:space:]]*:[[:space:]]*)"[^"]*"/\1"custom"/' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG" && echo "UPDATED" || echo "SED_FAILED"
+    fi
   else
-    echo "OK"
+    # Do not insert tls_mode if missing; report and skip
+    echo "NO_ENTRY"
   fi
-elif command -v python3 >/dev/null 2>&1; then
-  CURRENT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("tls_mode",""))' "$CONFIG")
-  if [[ "$CURRENT" != "custom" ]]; then
-    python3 -c 'import json,sys,os; p=sys.argv[1]; d=json.load(open(p)); d["tls_mode"]="custom"; open(p+".tmp","w").write(json.dumps(d,indent=2)); os.replace(p+".tmp",p)' "$CONFIG"
-    echo "UPDATED"
-  else
-    echo "OK"
-  fi
-else
-  echo "NO_TOOL"
-fi
 REMOTE
 )
 
@@ -221,8 +213,11 @@ REMOTE
     NO_CONFIG)
       log "    ! No /data/jetkvm_config.json found on ${host}; skipping tls_mode update"
       ;;
-    NO_TOOL)
-      log "    ! Neither 'jq' nor 'python3' available on ${host}; cannot modify /data/jetkvm_config.json"
+    NO_ENTRY)
+      log "    ! 'tls_mode' not found in /data/jetkvm_config.json on ${host}; not inserting (skipping)"
+      ;;
+    SED_FAILED|AWK_FAILED|BAD_FORMAT)
+      log "    ! Failed to update /data/jetkvm_config.json on ${host}; see $ssh_err"
       ;;
     *)
       log "    ! Unexpected output while checking tls_mode on ${host}: $ssh_out"
