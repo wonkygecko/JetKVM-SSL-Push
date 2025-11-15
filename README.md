@@ -9,7 +9,7 @@
 📜 Purpose
  ---
 - Validates SSH connectivity to all listed JetKVM hosts.
-- Downloads a certificate ZIP bundle from Certmate (with retries) via API.
+- Downloads a certificate ZIP bundle from CertMate (with retries) via API.
 - Unpacks and validates `fullchain.pem` and `privkey.pem`.
 - Compares cert and key to existing (if any) and only processes an upload if change detected.
 - Ensures `tls_mode` is set to `custom`, if not updates the TLS mode so that custom certificate will be used.
