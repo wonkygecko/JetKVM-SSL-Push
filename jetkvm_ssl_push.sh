@@ -446,6 +446,10 @@ for entry in "${HOSTS[@]}"; do
     continue
   fi
 
+  REMOTE_DIFFERS=true
+  NEEDS_RESTART=false
+  TLS_MODE_UPDATED=false
+
   # Ensure remote JetKVM is configured to use a custom TLS mode before uploading
   if ! ensure_remote_tls_custom "${JETKVM_HOST}"; then
     record_error_note "$JETKVM_HOST" "$CERT_NAME" "Failed to ensure remote tls_mode is 'custom' (status: ${ENSURE_TLS_MODE_RESULT:-unknown})."
@@ -454,32 +458,50 @@ for entry in "${HOSTS[@]}"; do
     cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
+  if [[ "${ENSURE_TLS_MODE_RESULT:-}" == "UPDATED" ]]; then
+    NEEDS_RESTART=true
+    TLS_MODE_UPDATED=true
+  fi
 
   # Compare downloaded cert/key with existing remote files; skip upload/restart if identical
   if compare_remote_certs "${JETKVM_HOST}" "$FULLCHAIN" "$PRIVKEY" "$HOST_TMP_DIR"; then
-    log "    [OK] ${JETKVM_HOST} (no update required)"
-    ((SUCCESS_COUNT++)) || true
-    cleanup_host_tmp_dir "$HOST_TMP_DIR"
-    continue
+    REMOTE_DIFFERS=false
+    if [[ "$NEEDS_RESTART" != "true" ]]; then
+      log "    [OK] ${JETKVM_HOST} (no update required)"
+      ((SUCCESS_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+    fi
+    log "    - tls_mode changed; restarting ${JETKVM_HOST} even though cert/key already match"
   fi
 
-  log "    - uploading cert/key to ${JETKVM_HOST}..."
-  # upload cert
-  if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" "cat > ${REMOTE_CERT}" < "$FULLCHAIN" 2>"$WORKDIR/ssh_error.log"; then
-    log "    ! Failed to upload certificate to ${JETKVM_HOST}"
-    log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
-    KEEP_ERRORS=true
+  if [[ "$REMOTE_DIFFERS" == "true" ]]; then
+    log "    - uploading cert/key to ${JETKVM_HOST}..."
+    # upload cert
+    if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" "cat > ${REMOTE_CERT}" < "$FULLCHAIN" 2>"$WORKDIR/ssh_error.log"; then
+      log "    ! Failed to upload certificate to ${JETKVM_HOST}"
+      log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
+      KEEP_ERRORS=true
+        ((FAIL_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+    fi
+    
+    # upload key
+    if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" "cat > ${REMOTE_KEY}" < "$PRIVKEY" 2>"$WORKDIR/ssh_error.log"; then
+      log "    ! Failed to upload key to ${JETKVM_HOST}"
+      log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
+      KEEP_ERRORS=true
       ((FAIL_COUNT++)) || true
-    cleanup_host_tmp_dir "$HOST_TMP_DIR"
-    continue
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+    fi
+    NEEDS_RESTART=true
   fi
-  
-  # upload key
-  if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" "cat > ${REMOTE_KEY}" < "$PRIVKEY" 2>"$WORKDIR/ssh_error.log"; then
-    log "    ! Failed to upload key to ${JETKVM_HOST}"
-    log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
-    KEEP_ERRORS=true
-    ((FAIL_COUNT++)) || true
+
+  if [[ "$NEEDS_RESTART" != "true" ]]; then
+    log "    [OK] ${JETKVM_HOST} (no update required)"
+    ((SUCCESS_COUNT++)) || true
     cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
@@ -600,7 +622,13 @@ EOSSH
       ;;
   esac
 
-  log "    [OK] ${JETKVM_HOST} updated"
+  if [[ "$REMOTE_DIFFERS" == "true" ]]; then
+    log "    [OK] ${JETKVM_HOST} updated"
+  elif [[ "$TLS_MODE_UPDATED" == "true" ]]; then
+    log "    [OK] ${JETKVM_HOST} tls_mode set to 'custom' and service restarted"
+  else
+    log "    [OK] ${JETKVM_HOST}"
+  fi
   ((SUCCESS_COUNT++)) || true
   cleanup_host_tmp_dir "$HOST_TMP_DIR"
 done
