@@ -21,6 +21,7 @@ ERR_trap() {
   rc=$?
   # caller returns: <line> <function> <sourcefile>
   caller_info=$(caller 0 || true)
+  cleanup_host_tmp_dir "${CURRENT_HOST_TMP_DIR:-}"
   log "[!] ERROR - exit $rc - command: ${BASH_COMMAND:-unknown} - caller: ${caller_info}"
 }
 trap 'ERR_trap' ERR
@@ -30,6 +31,55 @@ trap 'ERR_trap' ERR
 # ----------------------------
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# ----------------------------
+# secure helpers for temp data
+# ----------------------------
+safe_name() {
+  local input="$1"
+  local safe="${input//[^A-Za-z0-9._-]/_}"
+  [[ -n "$safe" ]] || safe="entry"
+  printf '%s' "$safe"
+}
+
+secure_wipe_directory() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return
+  if command -v shred >/dev/null 2>&1; then
+    while IFS= read -r -d '' file; do
+      shred -u "$file" 2>/dev/null || rm -f "$file" 2>/dev/null || true
+    done < <(find "$dir" -type f -print0 2>/dev/null || true)
+  fi
+  rm -rf "$dir" 2>/dev/null || true
+}
+
+cleanup_host_tmp_dir() {
+  local dir="$1"
+  [[ -n "${dir:-}" ]] || return
+  secure_wipe_directory "$dir"
+  if [[ "${CURRENT_HOST_TMP_DIR:-}" == "$dir" ]]; then
+    CURRENT_HOST_TMP_DIR=""
+  fi
+}
+
+record_error_note() {
+  local host="$1"
+  local cert="$2"
+  local message="$3"
+  local host_safe cert_safe
+  host_safe=$(safe_name "$host")
+  cert_safe=$(safe_name "$cert")
+  local note_file="${ERROR_NOTE_DIR}/${host_safe}_${cert_safe}.log"
+  mkdir -p "$ERROR_NOTE_DIR"
+  {
+    echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S %z')"
+    echo "Host: $host"
+    echo "Certificate: $cert"
+    echo
+    echo "$message"
+  } > "$note_file"
+  log "    ! Error details saved to: $note_file"
 }
 
 # ----------------------------
@@ -91,6 +141,9 @@ if [[ "$DRY_RUN" == "true" ]]; then
   log "[!] Running in DRY-RUN mode - no changes will be made"
 fi
 
+JETKVM_AUTOACCEPT_NEW_HOSTKEYS="${JETKVM_AUTOACCEPT_NEW_HOSTKEYS:-false}"
+JETKVM_AUTOACCEPT_NEW_HOSTKEYS="${JETKVM_AUTOACCEPT_NEW_HOSTKEYS,,}"
+
 # ----------------------------
 # 5. turn JETKVM_HOSTS into array
 #    (each line: host|certname)
@@ -118,7 +171,10 @@ SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTi
 # create workdir early so we can save logs during connectivity checks
 WORKDIR="$(mktemp -d)"
 KEEP_ERRORS=false
-trap 'if [[ "$KEEP_ERRORS" == "false" ]]; then rm -rf "$WORKDIR"; fi' EXIT
+ERROR_NOTE_DIR="$WORKDIR/error_notes"
+CURRENT_HOST_TMP_DIR=""
+ENSURE_TLS_MODE_RESULT=""
+trap 'if [[ "$KEEP_ERRORS" == "false" ]]; then secure_wipe_directory "$WORKDIR"; fi' EXIT
 
 # ----------------------------
 # 7. validate SSH connectivity
@@ -142,9 +198,19 @@ for entry in "${HOSTS[@]}"; do
         log "    Host key(s) for ${JETKVM_HOST}:"
         echo "$KEYS" | ssh-keygen -lf - 2>/dev/null || true
 
-        # prompt the user to accept the key
-        read -r -p "    Accept and add host key to ${KNOWN_HOSTS_FILE}? [y/N] " resp || resp="n"
-        if [[ "$resp" =~ ^[Yy]$ ]]; then
+        ACCEPT_KEY="false"
+        if [[ "$JETKVM_AUTOACCEPT_NEW_HOSTKEYS" == "true" ]]; then
+          ACCEPT_KEY="true"
+          log "    [AUTO] JETKVM_AUTOACCEPT_NEW_HOSTKEYS=true, automatically trusting host key for ${JETKVM_HOST}"
+        else
+          # prompt the user to accept the key
+          read -r -p "    Accept and add host key to ${KNOWN_HOSTS_FILE}? [y/N] " resp || resp="n"
+          if [[ "$resp" =~ ^[Yy]$ ]]; then
+            ACCEPT_KEY="true"
+          fi
+        fi
+
+        if [[ "$ACCEPT_KEY" == "true" ]]; then
           echo "$KEYS" >> "$KNOWN_HOSTS_FILE"
           chmod 644 "$KNOWN_HOSTS_FILE" 2>/dev/null || true
           log "    [+] Added host key for ${JETKVM_HOST} to ${KNOWN_HOSTS_FILE}"
@@ -178,6 +244,7 @@ done
 # ----------------------------
 # 7.b ensure tls_mode is set to 'custom' on remote
 # ----------------------------
+ENSURE_TLS_MODE_RESULT=""
 ensure_remote_tls_custom() {
   local host="$1"
   log "    - ensuring remote /data/kvm_config.json has tls_mode=custom on ${host}"
@@ -206,41 +273,48 @@ fi
 REMOTE
   ); then
     log "    ! SSH failure while ensuring tls_mode on ${host} - see $ssh_err"
+    ENSURE_TLS_MODE_RESULT="SSH_FAILURE"
     return 1
   fi
 
+  ENSURE_TLS_MODE_RESULT="$ssh_out"
   case "$ssh_out" in
     UPDATED)
       log "    [+] tls_mode set to 'custom' on ${host}"
+      return 0
       ;;
     OK)
       log "    [OK] tls_mode already 'custom' on ${host}"
+      return 0
       ;;
     NO_CONFIG)
       log "    ! No /data/kvm_config.json found on ${host}; skipping tls_mode update"
+      return 1
       ;;
     NO_ENTRY)
       log "    ! 'tls_mode' not found in /data/kvm_config.json on ${host}; not inserting (skipping)"
+      return 1
       ;;
     SED_FAILED|AWK_FAILED|BAD_FORMAT)
       log "    ! Failed to update /data/kvm_config.json on ${host}; see $ssh_err"
+      return 1
       ;;
     *)
       log "    ! Unexpected output while checking tls_mode on ${host}: $ssh_out"
+      return 1
       ;;
   esac
-  return 0
 }
 
 # ----------------------------
 # compare remote cert/key to local files
 # ----------------------------
 compare_remote_certs() {
-  local host="$1" local_cert="$2" local_key="$3"
-  local remote_cert_tmp="$WORKDIR/remote_cert_${host}.pem"
-  local remote_key_tmp="$WORKDIR/remote_key_${host}.pem"
-  local ssh_err_cert="$WORKDIR/ssh_cert_err_${host}.log"
-  local ssh_err_key="$WORKDIR/ssh_key_err_${host}.log"
+  local host="$1" local_cert="$2" local_key="$3" host_tmp_dir="$4"
+  local remote_cert_tmp="$host_tmp_dir/remote_cert.pem"
+  local remote_key_tmp="$host_tmp_dir/remote_key.pem"
+  local ssh_err_cert="$WORKDIR/ssh_cert_err_$(safe_name "$host").log"
+  local ssh_err_key="$WORKDIR/ssh_key_err_$(safe_name "$host").log"
 
   log "    - checking existing cert/key on ${host}"
 
@@ -261,9 +335,11 @@ compare_remote_certs() {
   # compare files
   if cmp -s "$local_cert" "$remote_cert_tmp" && cmp -s "$local_key" "$remote_key_tmp"; then
     log "    [OK] No update required on ${host} (cert/key identical)"
+    rm -f "$remote_cert_tmp" "$remote_key_tmp" 2>/dev/null || true
     return 0
   else
     log "    - Remote cert/key differ from downloaded files on ${host} (will upload)"
+    rm -f "$remote_cert_tmp" "$remote_key_tmp" 2>/dev/null || true
     return 1
   fi
 }
@@ -274,10 +350,6 @@ compare_remote_certs() {
 REMOTE_DIR="/userdata/jetkvm/tls"
 REMOTE_CERT="${REMOTE_DIR}/user-defined.crt"
 REMOTE_KEY="${REMOTE_DIR}/user-defined.key"
-
-WORKDIR="$(mktemp -d)"
-KEEP_ERRORS=false
-trap 'if [[ "$KEEP_ERRORS" == "false" ]]; then rm -rf "$WORKDIR"; fi' EXIT
 
 # ----------------------------
 # 9. download with retry logic
@@ -309,43 +381,41 @@ for entry in "${HOSTS[@]}"; do
 
   log "==> Processing ${JETKVM_HOST} (cert: ${CERT_NAME})"
 
-  ZIPFILE="$WORKDIR/${CERT_NAME}.zip"
-  CERTDIR="$WORKDIR/${CERT_NAME}"
+  HOST_TMP_DIR="$(mktemp -d "$WORKDIR/host.XXXXXX")"
+  ZIPFILE="$HOST_TMP_DIR/cert_bundle.zip"
+  CERTDIR="$HOST_TMP_DIR/certs"
   mkdir -p "$CERTDIR"
+  CURRENT_HOST_TMP_DIR="$HOST_TMP_DIR"
 
   log "    - downloading from certmate..."
   # Note: /tls endpoint is used to download the certificate bundle in ZIP format
   if ! download_with_retry "${CERTMATE_BASE}/${CERT_NAME}/tls" "$ZIPFILE"; then
-    ERROR_FILE="$WORKDIR/error_${CERT_NAME}.txt"
-    cp "$ZIPFILE" "$ERROR_FILE" 2>/dev/null || true
     log "    ! Failed to download ${CERT_NAME} after retries"
-    log "    ! Error details saved to: $ERROR_FILE"
+    record_error_note "$JETKVM_HOST" "$CERT_NAME" "Failed to download bundle after retries (last HTTP status: ${HTTP_CODE:-unknown})."
     KEEP_ERRORS=true
       ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
   # quick sanity check: is it actually a zip?
   if ! file "$ZIPFILE" | grep -qi 'Zip archive data'; then
-    log "    ! Downloaded file is not a ZIP. Contents:"
-    head -c 200 "$ZIPFILE" || true
-    echo
-    ERROR_FILE="$WORKDIR/error_${CERT_NAME}.txt"
-    cp "$ZIPFILE" "$ERROR_FILE"
-    log "    ! Error details saved to: $ERROR_FILE"
+    file_type=$(file "$ZIPFILE" 2>/dev/null || echo "unknown data")
+    log "    ! Downloaded file is not a ZIP (detected: $file_type)"
+    record_error_note "$JETKVM_HOST" "$CERT_NAME" "Downloaded file is not a ZIP (detected: $file_type)."
     KEEP_ERRORS=true
     ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
   log "    - unpacking..."
   if ! unzip -oq "$ZIPFILE" -d "$CERTDIR"; then
     log "    ! Failed to unpack ${ZIPFILE}"
-    ERROR_FILE="$WORKDIR/error_${CERT_NAME}.txt"
-    cp "$ZIPFILE" "$ERROR_FILE" 2>/dev/null || true
-    log "    ! Error details saved to: $ERROR_FILE"
+    record_error_note "$JETKVM_HOST" "$CERT_NAME" "Failed to unpack downloaded archive (zip file rejected by unzip)."
     KEEP_ERRORS=true
     ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
@@ -354,7 +424,10 @@ for entry in "${HOSTS[@]}"; do
 
   if [[ ! -f "$FULLCHAIN" || ! -f "$PRIVKEY" ]]; then
     log "    ! ERROR: ${CERT_NAME} archive did not contain fullchain.pem and privkey.pem"
+    record_error_note "$JETKVM_HOST" "$CERT_NAME" "Archive missing expected fullchain.pem or privkey.pem files."
+    KEEP_ERRORS=true
     ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
@@ -369,16 +442,24 @@ for entry in "${HOSTS[@]}"; do
     log "    [DRY-RUN] Would restart service on ${JETKVM_HOST}"
     log "    [OK] ${JETKVM_HOST} (dry-run)"
     ((SUCCESS_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
   # Ensure remote JetKVM is configured to use a custom TLS mode before uploading
-  ensure_remote_tls_custom "${JETKVM_HOST}" || log "    ! Warning: ensure_remote_tls_custom failed for ${JETKVM_HOST} (continuing)"
+  if ! ensure_remote_tls_custom "${JETKVM_HOST}"; then
+    record_error_note "$JETKVM_HOST" "$CERT_NAME" "Failed to ensure remote tls_mode is 'custom' (status: ${ENSURE_TLS_MODE_RESULT:-unknown})."
+    KEEP_ERRORS=true
+    ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
+    continue
+  fi
 
   # Compare downloaded cert/key with existing remote files; skip upload/restart if identical
-  if compare_remote_certs "${JETKVM_HOST}" "$FULLCHAIN" "$PRIVKEY"; then
+  if compare_remote_certs "${JETKVM_HOST}" "$FULLCHAIN" "$PRIVKEY" "$HOST_TMP_DIR"; then
     log "    [OK] ${JETKVM_HOST} (no update required)"
     ((SUCCESS_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
@@ -389,6 +470,7 @@ for entry in "${HOSTS[@]}"; do
     log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
     KEEP_ERRORS=true
       ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
   
@@ -398,19 +480,35 @@ for entry in "${HOSTS[@]}"; do
     log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
     KEEP_ERRORS=true
     ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
   log "    - restarting service on ${JETKVM_HOST}..."
   if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" 2>"$WORKDIR/ssh_error.log" <<'EOSSH'
 set -e
-if systemctl list-unit-files 2>/dev/null | grep -q jetkvm; then
+# Prefer systemctl where available (some hosts may have it), otherwise
+# on BusyBox-based JetKVM devices perform a safe reboot instead of
+# killing processes.
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q jetkvm; then
   systemctl restart jetkvm
-elif systemctl list-unit-files 2>/dev/null | grep -q kvm; then
+elif command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q kvm; then
   systemctl restart kvm
 else
-  # last resort: kill the app, supervisor should bring it back
-  pkill -f jetkvm_app || true
+  # BusyBox-based JetKVM: reboot the device. Use `busybox reboot` if
+  # available (typical on BusyBox), otherwise fall back to `reboot`.
+  # Use `|| true` to avoid the SSH session dropping causing a non-zero
+  # exit under `set -e`.
+  if command -v busybox >/dev/null 2>&1; then
+    busybox reboot >/dev/null 2>&1 || true
+  elif command -v reboot >/dev/null 2>&1; then
+    reboot >/dev/null 2>&1 || true
+  else
+    # No reboot command available; report but exit success so the
+    # overall run doesn't fail due to inability to restart remotely.
+    echo "! No reboot command available on host" >&2
+    exit 0
+  fi
 fi
 EOSSH
   then
@@ -418,11 +516,13 @@ EOSSH
     log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
     KEEP_ERRORS=true
     ((FAIL_COUNT++)) || true
+    cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
 
   log "    [OK] ${JETKVM_HOST} updated"
   ((SUCCESS_COUNT++)) || true
+  cleanup_host_tmp_dir "$HOST_TMP_DIR"
 done
 
 # ----------------------------
