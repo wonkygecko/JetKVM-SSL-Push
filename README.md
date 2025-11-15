@@ -51,7 +51,8 @@ DRY_RUN=true ./jetkvm_ssl_push.sh
 
 📃 SSH Notes & Connectivity
 ---
-- The script MUST be run manually for the first time (or when new JetKVM hosts are added) since it will prompt with each JetKVM's public SSH key that you must accept. Please verify the JetKVM's public SSH key is for the correct host.
+- Script is suggested to be ran manually the first time (or when new JetKVM hosts are added) to make the user review and accept the public SSH key of each JetKVM host.
+- Set `JETKVM_AUTOACCEPT_NEW_HOSTKEYS=true` in `.jetkvm.env` if you need fully unattended runs. When enabled, newly discovered host keys are accepted automatically after fingerprints are logged; leave it `false` (default) to keep the interactive confirmation.
 - The script uses strict SSH options by default (`StrictHostKeyChecking=yes`, `BatchMode=yes`) to avoid password prompts.
 - Ensure your private key permissions are correct:
 
@@ -74,7 +75,7 @@ chmod 600 /path/to/jetkvm_rsa
 
 🔒 Security & Safety
 ---
-- Script is required to be ran manually the first time (or when new JetKVM hosts are added) to force the user to review the public SSH key of the JetKVM host and ensure it is correct before being able to be setup as a cron job.
+- Script is suggested to be ran manually the first time (or when new JetKVM hosts are added) to make the user review and accept the public SSH key of each JetKVM host.
 - The script intentionally uses strict SSH and non-interactive modes to avoid accidental prompts.
 - Keep your private keys secure and limit access to the `.jetkvm.env` file.
 ---

@@ -485,33 +485,50 @@ for entry in "${HOSTS[@]}"; do
   fi
 
   log "    - restarting service on ${JETKVM_HOST}..."
-  if ! ssh -T $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" 2>"$WORKDIR/ssh_error.log" <<'EOSSH'
+  SSH_RESTART_STATUS=$(ssh -T $SSH_OPTS "${JETKVM_USER}@${JETKVM_HOST}" 2>"$WORKDIR/ssh_error.log" <<'EOSSH'
 set -e
-# Prefer systemctl where available (some hosts may have it), otherwise
-# on BusyBox-based JetKVM devices perform a safe reboot instead of
-# killing processes.
-if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q jetkvm; then
-  systemctl restart jetkvm
-elif command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q kvm; then
-  systemctl restart kvm
-else
-  # BusyBox-based JetKVM: reboot the device. Use `busybox reboot` if
-  # available (typical on BusyBox), otherwise fall back to `reboot`.
-  # Use `|| true` to avoid the SSH session dropping causing a non-zero
-  # exit under `set -e`.
-  if command -v busybox >/dev/null 2>&1; then
-    busybox reboot >/dev/null 2>&1 || true
-  elif command -v reboot >/dev/null 2>&1; then
-    reboot >/dev/null 2>&1 || true
-  else
-    # No reboot command available; report but exit success so the
-    # overall run doesn't fail due to inability to restart remotely.
-    echo "! No reboot command available on host" >&2
-    exit 0
+STATUS="UNKNOWN"
+# Prefer systemctl where available (some hosts may have it)
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl list-unit-files 2>/dev/null | grep -q 'jetkvm\.service'; then
+    if systemctl restart jetkvm >/dev/null 2>&1; then
+      STATUS="SERVICE_RESTART:jetkvm"
+    else
+      STATUS="SERVICE_FAILED:jetkvm"
+    fi
+  elif systemctl list-unit-files 2>/dev/null | grep -q 'kvm\.service'; then
+    if systemctl restart kvm >/dev/null 2>&1; then
+      STATUS="SERVICE_RESTART:kvm"
+    else
+      STATUS="SERVICE_FAILED:kvm"
+    fi
   fi
 fi
+
+if [ "$STATUS" = "UNKNOWN" ]; then
+  # BusyBox-based JetKVM: reboot the device via backgrounded shell
+  if command -v busybox >/dev/null 2>&1; then
+    if sh -c '(sleep 1; busybox reboot) >/dev/null 2>&1 &' ; then
+      STATUS="REBOOT_TRIGGERED:busybox"
+    else
+      STATUS="REBOOT_FAILED:busybox"
+    fi
+  elif command -v reboot >/dev/null 2>&1; then
+    if sh -c '(sleep 1; reboot) >/dev/null 2>&1 &' ; then
+      STATUS="REBOOT_TRIGGERED:reboot"
+    else
+      STATUS="REBOOT_FAILED:reboot"
+    fi
+  else
+    STATUS="NO_REBOOT_CMD"
+  fi
+fi
+
+echo "$STATUS"
 EOSSH
-  then
+  )
+  SSH_RC=$?
+  if [[ $SSH_RC -ne 0 ]]; then
     log "    ! Failed to restart service on ${JETKVM_HOST}"
     log "    ! SSH error: $(cat "$WORKDIR/ssh_error.log")"
     KEEP_ERRORS=true
@@ -519,6 +536,69 @@ EOSSH
     cleanup_host_tmp_dir "$HOST_TMP_DIR"
     continue
   fi
+
+  case "$SSH_RESTART_STATUS" in
+    SERVICE_RESTART:jetkvm)
+      log "    [OK] Restarted jetkvm.service via systemctl"
+      ;;
+    SERVICE_RESTART:kvm)
+      log "    [OK] Restarted kvm.service via systemctl"
+      ;;
+    REBOOT_TRIGGERED:busybox)
+      log "    [OK] Reboot scheduled via busybox on ${JETKVM_HOST}"
+      ;;
+    REBOOT_TRIGGERED:reboot)
+      log "    [OK] Reboot scheduled via reboot on ${JETKVM_HOST}"
+      ;;
+    SERVICE_FAILED:jetkvm)
+      log "    [INFO] systemctl restart jetkvm failed on ${JETKVM_HOST}; please investigate."
+      record_error_note "$JETKVM_HOST" "$CERT_NAME" "systemctl restart jetkvm failed on host."
+      KEEP_ERRORS=true
+      ((FAIL_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+      ;;
+    SERVICE_FAILED:kvm)
+      log "    [INFO] systemctl restart kvm failed on ${JETKVM_HOST}; please investigate."
+      record_error_note "$JETKVM_HOST" "$CERT_NAME" "systemctl restart kvm failed on host."
+      KEEP_ERRORS=true
+      ((FAIL_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+      ;;
+    REBOOT_FAILED:busybox)
+      log "    [INFO] Failed to trigger busybox reboot on ${JETKVM_HOST}; please reboot manually."
+      record_error_note "$JETKVM_HOST" "$CERT_NAME" "Failed to execute busybox reboot on host."
+      KEEP_ERRORS=true
+      ((FAIL_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+      ;;
+    REBOOT_FAILED:reboot)
+      log "    [INFO] Failed to execute reboot command on ${JETKVM_HOST}; please reboot manually."
+      record_error_note "$JETKVM_HOST" "$CERT_NAME" "Failed to execute reboot command on host."
+      KEEP_ERRORS=true
+      ((FAIL_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+      ;;
+    NO_REBOOT_CMD)
+      log "    [INFO] No reboot command available on ${JETKVM_HOST}; please reboot manually."
+      record_error_note "$JETKVM_HOST" "$CERT_NAME" "No reboot command available on host; manual reboot required."
+      KEEP_ERRORS=true
+      ((FAIL_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+      ;;
+    *)
+      log "    [INFO] Unknown restart status '${SSH_RESTART_STATUS}' on ${JETKVM_HOST}"
+      record_error_note "$JETKVM_HOST" "$CERT_NAME" "Unknown restart status '${SSH_RESTART_STATUS}' returned while restarting."
+      KEEP_ERRORS=true
+      ((FAIL_COUNT++)) || true
+      cleanup_host_tmp_dir "$HOST_TMP_DIR"
+      continue
+      ;;
+  esac
 
   log "    [OK] ${JETKVM_HOST} updated"
   ((SUCCESS_COUNT++)) || true
